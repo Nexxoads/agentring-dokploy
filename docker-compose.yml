@@ -107,8 +107,10 @@ services:
         set -e
         printf '%s' "$$GS_B64" | base64 -d > /secrets/google-services.json
         printf '%s' "$$SA_B64" | base64 -d > /secrets/firebase-service-account.json
+        # el relay corre como `node` (uid/gid 1000): sin esto no puede leer los ficheros
+        chown 1000:1000 /secrets/*.json
         chmod 600 /secrets/*.json
-        echo "secrets ready"
+        echo "secrets ready (owner 1000:1000)"
     networks: [agentring]
 
 networks:
