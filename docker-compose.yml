@@ -1,0 +1,92 @@
+# agentring en Dokploy — relay + LiveKit con los puertos de audio publicados.
+#
+# Dokploy aporta lo que el contenedor de Hermes no puede: Docker real en el host, así que
+# 7881/tcp y 50000-50100/udp quedan expuestos de verdad (eso es lo que faltaba para el audio).
+#
+# Variables (Dokploy > Environment):
+#   AGENTRING_DOMAIN, AGENTRING_AGENT_NAME, AGENTRING_API_KEY,
+#   LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_NODE_IP
+#
+# Traefik (red dokploy-network):
+#   /rtc*  -> livekit:7880      |      resto -> relay:8080
+
+services:
+  relay:
+    build: ./relay
+    image: agentring-relay:local
+    restart: unless-stopped
+    environment:
+      AGENTRING_PUBLIC_URL: https://${AGENTRING_DOMAIN:?set AGENTRING_DOMAIN}
+      AGENTRING_AGENT_NAME: ${AGENTRING_AGENT_NAME:-SofIA}
+      AGENTRING_API_KEY: ${AGENTRING_API_KEY:?set AGENTRING_API_KEY}
+      AGENTRING_TRUSTED_PROXIES: "1"
+      AGENTRING_RING_TIMEOUT_S: "60"
+      LIVEKIT_URL: wss://${AGENTRING_DOMAIN}
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
+    volumes:
+      - relay-data:/data
+    networks:
+      - agentring
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.agentring.rule=Host(`${AGENTRING_DOMAIN}`)
+      - traefik.http.routers.agentring.entrypoints=web
+      - traefik.http.routers.agentring.priority=10
+      - traefik.http.routers.agentring.service=agentring
+      - traefik.http.routers.agentring-secure.rule=Host(`${AGENTRING_DOMAIN}`)
+      - traefik.http.routers.agentring-secure.entrypoints=websecure
+      - traefik.http.routers.agentring-secure.priority=10
+      - traefik.http.routers.agentring-secure.tls.certresolver=letsencrypt
+      - traefik.http.routers.agentring-secure.service=agentring
+      - traefik.http.services.agentring.loadbalancer.server.port=8080
+
+  livekit:
+    image: livekit/livekit-server:v1.13.10
+    restart: unless-stopped
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      LIVEKIT_PORT: "7880"
+      LIVEKIT_RTC_TCP_PORT: "7881"
+      LIVEKIT_RTC_PORT_RANGE_START: "50000"
+      LIVEKIT_RTC_PORT_RANGE_END: "50100"
+      LIVEKIT_RTC_USE_EXTERNAL_IP: "false"
+      LIVEKIT_ROOM_AUTO_CREATE: "false"
+      LIVEKIT_ROOM_EMPTY_TIMEOUT: "30"
+      LIVEKIT_ROOM_DEPARTURE_TIMEOUT: "10"
+      LIVEKIT_ROOM_MAX_PARTICIPANTS: "4"
+      LIVEKIT_WEBHOOK_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_WEBHOOK_URLS: "http://relay:8080/v1/livekit/webhook"
+      LIVEKIT_LOG_LEVEL: info
+    command: ["--node-ip", "${LIVEKIT_NODE_IP:?set LIVEKIT_NODE_IP}"]
+    ports:
+      # LO IMPORTANTE: el audio necesita esto publicado en el host.
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    networks:
+      - agentring
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.agentring-rtc.rule=Host(`${AGENTRING_DOMAIN}`) && PathPrefix(`/rtc`)
+      - traefik.http.routers.agentring-rtc.entrypoints=web
+      - traefik.http.routers.agentring-rtc.priority=100
+      - traefik.http.routers.agentring-rtc.service=agentring-rtc
+      - traefik.http.routers.agentring-rtc-secure.rule=Host(`${AGENTRING_DOMAIN}`) && PathPrefix(`/rtc`)
+      - traefik.http.routers.agentring-rtc-secure.entrypoints=websecure
+      - traefik.http.routers.agentring-rtc-secure.priority=100
+      - traefik.http.routers.agentring-rtc-secure.tls.certresolver=letsencrypt
+      - traefik.http.routers.agentring-rtc-secure.service=agentring-rtc
+      - traefik.http.services.agentring-rtc.loadbalancer.server.port=7880
+
+networks:
+  agentring:
+  dokploy-network:
+    external: true
+
+volumes:
+  relay-data:
