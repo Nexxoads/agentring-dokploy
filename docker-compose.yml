@@ -25,8 +25,14 @@ services:
       LIVEKIT_API_URL: http://livekit:7880
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}
+      FCM_SERVICE_ACCOUNT_FILE: /secrets/firebase-service-account.json
+      FCM_GOOGLE_SERVICES_FILE: /secrets/google-services.json
     volumes:
       - relay-data:/data
+      - relay-secrets:/secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     networks:
       - agentring
       - dokploy-network
@@ -83,6 +89,28 @@ services:
       - traefik.http.routers.agentring-rtc-secure.service=agentring-rtc
       - traefik.http.services.agentring-rtc.loadbalancer.server.port=7880
 
+  # Escribe los dos ficheros de Firebase en un volumen compartido, desde variables de
+  # entorno en base64. Así los secretos viven en Dokploy (nunca en este repo público) y el
+  # relay los lee como ficheros, que es lo que espera.
+  secrets-init:
+    image: busybox:1.37
+    restart: "no"
+    environment:
+      GS_B64: ${FCM_GOOGLE_SERVICES_B64:?set FCM_GOOGLE_SERVICES_B64}
+      SA_B64: ${FCM_SERVICE_ACCOUNT_B64:?set FCM_SERVICE_ACCOUNT_B64}
+    volumes:
+      - relay-secrets:/secrets
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        printf '%s' "$$GS_B64" | base64 -d > /secrets/google-services.json
+        printf '%s' "$$SA_B64" | base64 -d > /secrets/firebase-service-account.json
+        chmod 600 /secrets/*.json
+        echo "secrets ready"
+    networks: [agentring]
+
 networks:
   agentring:
   dokploy-network:
@@ -90,3 +118,4 @@ networks:
 
 volumes:
   relay-data:
+  relay-secrets:
